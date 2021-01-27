@@ -1,8 +1,19 @@
+From cfc6f40e6616a871c8ee628d4b5f020ecf8ff99c Mon Sep 17 00:00:00 2001
+From: Daria Lepikhova <d.lepikhova@postgrespro.ru>
+Date: Wed, 27 Jan 2021 14:53:32 +0500
+Subject: [PATCH] custom_signals_12.0
+
+---
+ src/backend/storage/ipc/procsignal.c | 94 ++++++++++++++++++++++++++++
+ src/backend/tcop/postgres.c          |  2 +
+ src/include/storage/procsignal.h     | 19 ++++++
+ 3 files changed, 115 insertions(+)
+
 diff --git a/src/backend/storage/ipc/procsignal.c b/src/backend/storage/ipc/procsignal.c
-index 7605b2c367..6a4327fe76 100644
+index 7605b2c3674..a3860dd01c6 100644
 --- a/src/backend/storage/ipc/procsignal.c
 +++ b/src/backend/storage/ipc/procsignal.c
-@@ -60,12 +60,20 @@ typedef struct
+@@ -60,12 +60,21 @@ typedef struct
   */
  #define NumProcSignalSlots	(MaxBackends + NUM_AUXPROCTYPES)
  
@@ -10,6 +21,7 @@ index 7605b2c367..6a4327fe76 100644
 +	((reason) >= PROCSIG_CUSTOM_1 && (reason) <= PROCSIG_CUSTOM_N)
 +
 +static bool CustomSignalPendings[NUM_CUSTOM_PROCSIGNALS];
++static bool CustomSignalProcessing[NUM_CUSTOM_PROCSIGNALS];
 +static ProcSignalHandler_type CustomInterruptHandlers[NUM_CUSTOM_PROCSIGNALS];
 +
  static ProcSignalSlot *ProcSignalSlots = NULL;
@@ -23,7 +35,7 @@ index 7605b2c367..6a4327fe76 100644
  /*
   * ProcSignalShmemSize
   *		Compute space needed for procsignal's shared memory
-@@ -165,6 +173,36 @@ CleanupProcSignalState(int status, Datum arg)
+@@ -165,6 +174,36 @@ CleanupProcSignalState(int status, Datum arg)
  	slot->pss_pid = 0;
  }
  
@@ -60,7 +72,7 @@ index 7605b2c367..6a4327fe76 100644
  /*
   * SendProcSignal
   *		Send a signal to a Postgres process
-@@ -292,9 +330,63 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
+@@ -292,9 +331,64 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
  	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN))
  		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN);
  
@@ -107,28 +119,29 @@ index 7605b2c367..6a4327fe76 100644
 +{
 +	int i;
 +
-+	/* Disable interrupts to avoid recursive calls */
-+	HOLD_INTERRUPTS();
-+
 +	/* Check on expiring of custom signals and call its handlers if exist */
 +	for (i = 0; i < NUM_CUSTOM_PROCSIGNALS; i++)
-+		if (CustomSignalPendings[i])
++	{
++		if (!CustomSignalProcessing[i] && CustomSignalPendings[i])
 +		{
 +			ProcSignalHandler_type  handler;
 +
 +			CustomSignalPendings[i] = false;
 +			handler = CustomInterruptHandlers[i];
 +			if (handler != NULL)
++			{
++				CustomSignalProcessing[i] = true;
 +				handler();
++				CustomSignalProcessing[i] = false;
++			}
 +		}
-+
-+	RESUME_INTERRUPTS();
++	}
 +}
 diff --git a/src/backend/tcop/postgres.c b/src/backend/tcop/postgres.c
-index c28cc37012..f5a48b98e8 100644
+index 21fd1ffa5fd..c3cf3defb92 100644
 --- a/src/backend/tcop/postgres.c
 +++ b/src/backend/tcop/postgres.c
-@@ -3139,6 +3139,8 @@ ProcessInterrupts(void)
+@@ -3151,6 +3151,8 @@ ProcessInterrupts(void)
  
  	if (ParallelMessagePending)
  		HandleParallelMessages();
@@ -138,7 +151,7 @@ index c28cc37012..f5a48b98e8 100644
  
  
 diff --git a/src/include/storage/procsignal.h b/src/include/storage/procsignal.h
-index 05b186a05c..d961790b7e 100644
+index 05b186a05c2..d961790b7e8 100644
 --- a/src/include/storage/procsignal.h
 +++ b/src/include/storage/procsignal.h
 @@ -17,6 +17,8 @@
@@ -194,3 +207,6 @@ index 05b186a05c..d961790b7e 100644
  extern void procsignal_sigusr1_handler(SIGNAL_ARGS);
  
  #endif							/* PROCSIGNAL_H */
+-- 
+2.25.1
+
